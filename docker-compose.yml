@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # ----------------------------------------------------------------------------
   # Backend Service (Python 3.12 + FastAPI + Elexon Ingestion & Evaluation)
