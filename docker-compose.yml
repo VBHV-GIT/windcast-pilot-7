@@ -1,0 +1,46 @@
+version: "3.8"
+
+services:
+  # ----------------------------------------------------------------------------
+  # Backend Service (Python 3.12 + FastAPI + Elexon Ingestion & Evaluation)
+  # ----------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: windcast-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - windcast-network
+
+  # ----------------------------------------------------------------------------
+  # Frontend Service (React 18 + Vite + TypeScript + NGINX Reverse Proxy)
+  # ----------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: windcast-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - windcast-network
+
+networks:
+  windcast-network:
+    driver: bridge

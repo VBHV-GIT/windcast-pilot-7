@@ -31,206 +31,167 @@ windcast-analysis/
 │   │   ├── test_forecast_evaluator.py  # Forecast selection, cutoffs, alignment & metric formula tests
 │   │   └── test_api.py                 # FastAPI route tests, parameter validation & error handling
 │   ├── pytest.ini                      # Pytest marker registration
-│   └── requirements.txt                # Backend dependencies
+│   ├── requirements.txt                # Backend dependencies
+│   ├── Dockerfile                      # Production backend Docker image
+│   └── .dockerignore                   # Backend Docker build exclusion rules
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx                     # Presentation component
-│   │   ├── main.tsx                    # React entrypoint
+│   │   ├── types/
+│   │   │   └── evaluation.ts           # Strict TypeScript contracts matching Pydantic schemas
+│   │   ├── services/
+│   │   │   └── api.ts                  # Typed API client with error handling
+│   │   ├── components/
+│   │   │   ├── Header.tsx              # Application header & live health indicator
+│   │   │   ├── ControlBar.tsx          # Date range, evaluation cutoff, and alignment controls
+│   │   │   ├── KpiGrid.tsx             # Metric cards (MAE, RMSE, Signed Bias, MAPE, WMAPE)
+│   │   │   ├── GenerationChart.tsx     # Interactive Recharts time-series visualization
+│   │   │   ├── ExclusionsView.tsx      # Transparency audit & verified CSV export
+│   │   │   ├── MethodologyModal.tsx    # Assumptions disclosure & formula definitions
+│   │   │   └── ErrorBanner.tsx         # Accessible error presentation
+│   │   ├── App.tsx                     # React dashboard root
+│   │   ├── main.tsx                    # React DOM entrypoint
 │   │   └── index.css                   # Tailwind CSS directives
-│   ├── package.json                    # Node dependencies
+│   ├── package.json                    # Node dependencies & Recharts
 │   ├── tsconfig.json                   # TypeScript configuration
 │   ├── vite.config.ts                  # Vite build & proxy configuration
-│   └── tailwind.config.js              # Tailwind CSS theme configuration
+│   ├── tailwind.config.js              # Tailwind CSS theme configuration
+│   ├── nginx.conf                      # Production NGINX reverse-proxy configuration
+│   ├── Dockerfile                      # Multi-stage production frontend Docker image
+│   └── .dockerignore                   # Frontend Docker build exclusion rules
+├── docker-compose.yml                  # Root container orchestration
 ├── .gitignore                          # Version control ignore rules
 └── README.md                           # Documentation & API specifications
 ```
 
 ---
 
-## 2. API Endpoints Specification
+## 2. Docker Containerization & Docker Compose
 
-All endpoints are served under `/api` and support interactive documentation at `/docs` (Swagger UI) and `/redoc`.
+WindCast Analytics is fully containerized using multi-stage production Docker images and unified via Docker Compose.
 
-### Query Parameters (Common Across Evaluation Endpoints)
+### Container Architecture & Networking
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `start_date` | `YYYY-MM-DD` | `2026-01-01` | Delivery start date inclusive. |
-| `end_date` | `YYYY-MM-DD` | `2026-01-31` | Delivery end date inclusive (max 35-day span). |
-| `cutoff_time` | `HH:MM` or `HH:MM:SS` | `17:00` | Day-ahead cutoff on day $D-1$ in UTC (**Pilot Assumption: 17:00 UTC**). |
-| `alignment` | `string` | `HOURLY` | Resolution alignment: `HOURLY` (physically exact average) or `HALF_HOURLY` (broadcast). |
-| `use_cache` | `boolean` | `false` | Whether to use cached raw Elexon API responses. |
-
----
-
-### `GET /api/evaluation`
-Reconstructs day-ahead forecasts under the specified cutoff, matches them with actual outturn, and returns the complete evaluation dataset including metrics, audit, and matched observations.
-
-**Example Request**:
-```http
-GET /api/evaluation?start_date=2026-01-01&end_date=2026-01-01&cutoff_time=17:00&alignment=HOURLY
+```
+Browser (Host Machine)
+   │
+   ├──────► Port 3000: NGINX Web Server (windcast-frontend)
+   │           │
+   │           ├── Static Assets (React SPA bundle)
+   │           └── /api/ Reverse Proxy ────┐ (Internal Docker Bridge Network)
+   │                                       │
+   └──────► Port 8000 (Direct API Access)  ▼
+             Uvicorn / FastAPI Backend (windcast-backend)
 ```
 
-**Example Response**:
-```json
-{
-  "config": {
-    "start_date": "2026-01-01",
-    "end_date": "2026-01-01",
-    "day_ahead_cutoff_time": "17:00:00",
-    "alignment": "HOURLY",
-    "mape_epsilon": 1.0
-  },
-  "metrics": {
-    "sample_size": 24,
-    "mae_mw": 4217.4167,
-    "rmse_mw": 4277.9223,
-    "signed_bias_mw": 4217.4167,
-    "mape_percent": 27.6507,
-    "wmape_percent": 27.4358,
-    "total_forecast_energy_mwh": 470145.0,
-    "total_actual_energy_mwh": 368927.0,
-    "mape_valid_samples": 24,
-    "mape_excluded_zero_samples": 0
-  },
-  "audit": {
-    "total_target_intervals": 24,
-    "matched_intervals": 24,
-    "coverage_rate_percent": 100.0,
-    "missing_actual_count": 0,
-    "missing_forecast_count": 0,
-    "excluded_non_target_delivery_records": 0,
-    "excluded_retrospective_forecasts": 0,
-    "excluded_post_cutoff_forecasts": 0,
-    "unmatched_intervals": []
-  },
-  "observations": [
-    {
-      "interval_start": "2026-01-01T00:00:00Z",
-      "interval_end": "2026-01-01T01:00:00Z",
-      "forecast_mw": 19595.0,
-      "actual_mw": 13814.5,
-      "forecast_publish_time": "2025-12-31T15:30:00Z",
-      "error_mw": 5780.5,
-      "absolute_error_mw": 5780.5,
-      "percentage_error": 41.8437
-    }
-  ]
-}
-```
+- **Browser-to-Container Isolation**: The user's browser accesses `http://localhost:3000`. The frontend container runs an optimized NGINX server that serves the pre-compiled React static assets and reverse-proxies `/api/` requests internally to `http://backend:8000/api/`. This ensures the browser never needs to resolve internal Docker service names and eliminates CORS issues.
+- **Backend Image (`backend/Dockerfile`)**: Python 3.12-slim base image, non-root user (`appuser`), layer-cached `pip install`, and built-in health check probing `/api/health`.
+- **Frontend Image (`frontend/Dockerfile`)**: Multi-stage build (Stage 1: Node 22 Alpine build; Stage 2: NGINX Alpine production web server with gzip compression and caching).
 
 ---
 
-### `GET /api/evaluation/summary`
-Returns high-level Key Performance Indicators (KPIs) formatted for executive cards and summary widgets. Unavailable metrics are returned as `null` (not zero).
-
-**Example Response**:
-```json
-{
-  "start_date": "2026-01-01",
-  "end_date": "2026-01-01",
-  "day_ahead_cutoff_time": "17:00",
-  "alignment": "HOURLY",
-  "total_target_intervals": 24,
-  "matched_intervals": 24,
-  "coverage_rate_percent": 100.0,
-  "mae_mw": 4217.4167,
-  "rmse_mw": 4277.9223,
-  "signed_bias_mw": 4217.4167,
-  "mape_percent": 27.6507,
-  "wmape_percent": 27.4358,
-  "total_forecast_energy_mwh": 470145.0,
-  "total_actual_energy_mwh": 368927.0,
-  "mape_valid_samples": 24,
-  "mape_excluded_zero_samples": 0
-}
-```
+### Prerequisites
+- **Docker Desktop for Windows**: Installed with WSL 2 backend enabled.
+- Ensure Docker Desktop is launched and running (status in system tray: green / running).
 
 ---
 
-### `GET /api/evaluation/timeseries`
-Returns chronological observations formatted specifically for charting libraries (Recharts / Chart.js).
+### Docker Compose Commands
 
-**Example Response**:
-```json
-{
-  "alignment": "HOURLY",
-  "total_observations": 24,
-  "series": [
-    {
-      "interval_start": "2026-01-01T00:00:00Z",
-      "interval_end": "2026-01-01T01:00:00Z",
-      "forecast_mw": 19595.0,
-      "actual_mw": 13814.5,
-      "forecast_publish_time": "2025-12-31T15:30:00Z",
-      "error_mw": 5780.5,
-      "absolute_error_mw": 5780.5,
-      "percentage_error": 41.8437
-    }
-  ]
-}
-```
+1. **Build the container images**:
+   ```bash
+   docker compose build
+   ```
 
----
+2. **Start the complete stack in the background**:
+   ```bash
+   docker compose up -d
+   ```
 
-### `GET /api/evaluation/exclusions`
-Returns a transparent audit breakdown of matched vs missing intervals, retrospective hindcast discards, and post-cutoff exclusions.
+3. **Verify running containers and health status**:
+   ```bash
+   docker compose ps
+   ```
+   Both `windcast-backend` and `windcast-frontend` will report `Up (healthy)`.
 
-**Example Response**:
-```json
-{
-  "total_target_intervals": 24,
-  "matched_intervals": 24,
-  "coverage_rate_percent": 100.0,
-  "missing_actual_count": 0,
-  "missing_forecast_count": 0,
-  "excluded_non_target_delivery_records": 0,
-  "excluded_retrospective_forecasts": 0,
-  "excluded_post_cutoff_forecasts": 0,
-  "unmatched_intervals": []
-}
-```
+4. **Access the application**:
+   - **Frontend Dashboard**: Open [http://localhost:3000](http://localhost:3000) in your browser.
+   - **Backend API Docs**: Open [http://localhost:8000/docs](http://localhost:8000/docs).
+   - **Health Endpoint**: [http://localhost:3000/api/health](http://localhost:3000/api/health) (via NGINX proxy) or [http://localhost:8000/api/health](http://localhost:8000/api/health) (direct).
 
----
+5. **Inspect real-time logs**:
+   ```bash
+   # All services:
+   docker compose logs -f
+   # Backend service only:
+   docker compose logs -f backend
+   # Frontend service only:
+   docker compose logs -f frontend
+   ```
 
-### Error Handling & HTTP Status Codes
+6. **Rebuild after code modifications**:
+   ```bash
+   docker compose up -d --build
+   ```
 
-- **`400 Bad Request`**:
-  - `start_date` occurs after `end_date`.
-  - Date span exceeds 35 days.
-  - Invalid `cutoff_time` format (e.g. `25:00`).
-- **`422 Unprocessable Entity`**:
-  - Invalid query parameter types or unsupported `alignment` enum values.
-- **`502 Bad Gateway`**:
-  - Upstream Elexon BMRS API returned an error status code.
-- **`504 Gateway Timeout`**:
-  - Upstream Elexon connection failed or timed out after configured retries.
+7. **Stop and remove containers and network**:
+   ```bash
+   docker compose down
+   ```
 
 ---
 
-## 3. Running & Testing Locally
+## 3. Local Development (Without Docker)
 
-### Run Backend Server
+### Backend (Python FastAPI)
 ```bash
+# 1. Run tests (offline):
+python -m pytest backend/tests
+
+# 2. Run optional live smoke tests:
+$env:RUN_LIVE_TESTS="1"; python -m pytest backend/tests/test_elexon_smoke.py
+
+# 3. Start local server:
 uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
-API Documentation: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
-### Run Automated Backend Tests
+### Frontend (React + Vite + TypeScript)
 ```bash
-python -m pytest backend/tests
-```
-All 41 unit and route tests run **100% offline** in < 1 second using mocked transports.
-
-### Optional: Run Live Elexon Smoke Tests
-```bash
-# PowerShell:
-$env:RUN_LIVE_TESTS="1"; python -m pytest backend/tests/test_elexon_smoke.py
-# Bash:
-RUN_LIVE_TESTS=1 python -m pytest backend/tests/test_elexon_smoke.py
-```
-
-### Run Frontend Build Verification
-```bash
+# 1. Build check:
 npm --prefix frontend run build
+
+# 2. Start development server:
+npm --prefix frontend run dev
 ```
+Open [http://localhost:5173](http://localhost:5173) in your browser. Vite automatically proxies `/api` to `http://127.0.0.1:8000`.
+
+---
+
+## 4. API Endpoints Specification
+
+All endpoints are served under `/api`:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/health` | Service health status and ISO UTC timestamp. |
+| `GET` | `/api/evaluation` | Full evaluation payload: config, metrics, audit, observations. |
+| `GET` | `/api/evaluation/summary` | High-level summary KPIs (MAE, RMSE, Signed Bias, MAPE, WMAPE). |
+| `GET` | `/api/evaluation/timeseries` | Chronological time-series observations formatted for charts. |
+| `GET` | `/api/evaluation/exclusions` | Exclusions audit, missing intervals, and ingestion counters. |
+
+### Query Parameters
+
+- `start_date`: Delivery start date (default `2026-01-01`).
+- `end_date`: Delivery end date (default `2026-01-31`, max 35 days).
+- `cutoff_time`: Evaluation cutoff time on day $D-1$ in UTC (default `17:00` is a pilot assumption).
+- `alignment`: `HOURLY` (exact power mean) or `HALF_HOURLY` (broadcast).
+- `use_cache`: `true` or `false` (uses server-side cache for fast reloading).
+
+---
+
+## 5. Methodology & Assumptions Summary
+
+1. **Pilot Default Cutoff**: 17:00 UTC on day $D-1$ is implemented as a configurable pilot default rather than a verified statutory market deadline.
+2. **Causality & Look-Ahead Prevention**: Forecasts must satisfy `publishTime <= Cutoff(D) < startTime`. Any retrospective hindcasts (`startTime <= publishTime`) are discarded.
+3. **Physical Hourly Averaging**: Because power in Megawatts ($MW$) is a rate of energy delivery, hourly actual is the exact mean of the two constituent half-hours:
+   $$\text{Actual}_{\text{hourly}} = \frac{\text{SP}_1 + \text{SP}_2}{2}$$
+4. **MAPE Zero-Actual Policy**: Excludes intervals where actual outturn $< 1.0\text{ MW}$ to avoid division-by-zero explosions. Reports excluded count explicitly.
