@@ -2,9 +2,11 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.app.routes.evaluation import router as evaluation_router
+
 app = FastAPI(
     title="WindCast Analytics API",
-    description="UK Wind Generation Forecast vs Outturn Evaluation Service",
+    description="UK Wind Generation Forecast vs Outturn Evaluation Service (Elexon BMRS FUELHH & WINDFOR)",
     version="0.1.0",
 )
 
@@ -16,6 +18,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register route modules
+app.include_router(evaluation_router, prefix="/api")
 
 
 @app.get("/health", tags=["Health"])
