@@ -1,59 +1,205 @@
-import React from "react";
-import { Activity, Wind, Server, ShieldCheck } from "lucide-react";
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  checkBackendHealth,
+  fetchEvaluationExclusions,
+  fetchEvaluationSummary,
+  fetchEvaluationTimeseries,
+} from "./services/api";
+import {
+  EvaluationQueryParams,
+  EvaluationSummaryResponse,
+  ExclusionsResponse,
+  HealthResponse,
+  TimeSeriesResponse,
+} from "./types/evaluation";
+import { Header } from "./components/Header";
+import { ControlBar } from "./components/ControlBar";
+import { ErrorBanner } from "./components/ErrorBanner";
+import { KpiGrid } from "./components/KpiGrid";
+import { GenerationChart } from "./components/GenerationChart";
+import { ExclusionsView } from "./components/ExclusionsView";
+import { MethodologyModal } from "./components/MethodologyModal";
+import { BarChart2, ShieldAlert } from "lucide-react";
 
 export const App: React.FC = () => {
+  // Query parameters state (default: January 1–31, 2026, 17:00 UTC pilot cutoff, Hourly alignment, Cache enabled)
+  const [params, setParams] = useState<EvaluationQueryParams>({
+    startDate: "2026-01-01",
+    endDate: "2026-01-31",
+    cutoffTime: "17:00",
+    alignment: "HOURLY",
+    useCache: true,
+  });
+
+  // Data states
+  const [summary, setSummary] = useState<EvaluationSummaryResponse | null>(null);
+  const [timeseries, setTimeseries] = useState<TimeSeriesResponse | null>(null);
+  const [exclusions, setExclusions] = useState<ExclusionsResponse | null>(null);
+
+  // Health and UI states
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [healthLoading, setHealthLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string | undefined>(undefined);
+  const [isMethodologyOpen, setIsMethodologyOpen] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<"overview" | "exclusions">("overview");
+
+  // Check backend health on mount
+  useEffect(() => {
+    let isMounted = true;
+    checkBackendHealth()
+      .then((res) => {
+        if (isMounted) {
+          setHealth(res);
+          setHealthLoading(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setHealth(null);
+          setHealthLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Fetch all evaluation data concurrently
+  const loadEvaluationData = useCallback(async () => {
+    setIsLoading(true);
+    setErrorMessage(null);
+    setErrorDetails(undefined);
+
+    try {
+      const [sumRes, timeRes, exclRes] = await Promise.all([
+        fetchEvaluationSummary(params),
+        fetchEvaluationTimeseries(params),
+        fetchEvaluationExclusions(params),
+      ]);
+
+      setSummary(sumRes);
+      setTimeseries(timeRes);
+      setExclusions(exclRes);
+    } catch (err: any) {
+      setErrorMessage(err.message || "Failed to retrieve forecast evaluation data");
+      setErrorDetails(err.details || undefined);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [params]);
+
+  // Trigger evaluation fetch on parameter changes
+  useEffect(() => {
+    loadEvaluationData();
+  }, [loadEvaluationData]);
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col">
-      <header className="bg-slate-900 text-white px-6 py-4 shadow-sm">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="bg-emerald-500/20 p-2 rounded-lg border border-emerald-500/40">
-              <Wind className="w-6 h-6 text-emerald-400" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight">WindCast Analytics</h1>
-              <p className="text-xs text-slate-400">UK Wind Forecast Accuracy Evaluation | January 2026</p>
-            </div>
+    <div className="min-h-screen bg-slate-100/70 text-slate-900 flex flex-col font-sans">
+      {/* Application Navigation Header */}
+      <Header
+        health={health}
+        healthLoading={healthLoading}
+        onOpenMethodology={() => setIsMethodologyOpen(true)}
+      />
+
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Interactive Query & Evaluation Controls */}
+        <ControlBar
+          params={params}
+          onChange={setParams}
+          onRefresh={loadEvaluationData}
+          isLoading={isLoading}
+        />
+
+        {/* Global Error Banner */}
+        {errorMessage && (
+          <ErrorBanner
+            message={errorMessage}
+            details={errorDetails}
+            onRetry={loadEvaluationData}
+            isRetrying={isLoading}
+          />
+        )}
+
+        {/* Navigation Tabs */}
+        <div className="flex items-center justify-between mb-4 border-b border-slate-200">
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveTab("overview")}
+              className={`flex items-center gap-1.5 py-2.5 px-4 text-xs font-semibold border-b-2 transition-all ${
+                activeTab === "overview"
+                  ? "border-emerald-600 text-emerald-800 bg-white/50 rounded-t-lg"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              <BarChart2 className="w-4 h-4" />
+              <span>Forecast Evaluation & Charts</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("exclusions")}
+              className={`flex items-center gap-1.5 py-2.5 px-4 text-xs font-semibold border-b-2 transition-all ${
+                activeTab === "exclusions"
+                  ? "border-emerald-600 text-emerald-800 bg-white/50 rounded-t-lg"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              <ShieldAlert className="w-4 h-4" />
+              <span>
+                Data Transparency & Exclusions ({exclusions?.unmatched_intervals.length ?? 0})
+              </span>
+            </button>
           </div>
-          <div className="flex items-center gap-2 bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 text-xs px-3 py-1.5 rounded-full">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Milestone 1: Scaffold Initialized</span>
+
+          <div className="text-xs text-slate-500 hidden sm:block">
+            <span>
+              Evaluation Cutoff: <strong>{params.cutoffTime} UTC</strong> | Alignment:{" "}
+              <strong>{params.alignment === "HOURLY" ? "Hourly (Mean)" : "Half-Hourly"}</strong>
+            </span>
           </div>
         </div>
-      </header>
 
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 flex flex-col items-center justify-center">
-        <div className="max-w-xl w-full bg-white rounded-xl shadow-sm border border-slate-200 p-8 text-center">
-          <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4 text-emerald-600">
-            <ShieldCheck className="w-6 h-6" />
-          </div>
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">Core Environment Ready</h2>
-          <p className="text-sm text-slate-600 mb-6">
-            React 18 + Vite + TypeScript frontend and Python FastAPI backend are verified.
-            The pipeline is prepared for Elexon BMRS <code className="bg-slate-100 px-1 py-0.5 rounded text-emerald-700 font-mono">FUELHH</code> and <code className="bg-slate-100 px-1 py-0.5 rounded text-emerald-700 font-mono">WINDFOR</code> ingestion in Milestone 2.
-          </p>
+        {/* Tab 1: Primary Dashboard View */}
+        {activeTab === "overview" && (
+          <>
+            {/* KPI Cards Grid */}
+            <KpiGrid summary={summary} isLoading={isLoading} />
 
-          <div className="grid grid-cols-2 gap-3 text-left">
-            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 mb-1">
-                <Server className="w-4 h-4 text-emerald-600" /> Backend
-              </div>
-              <p className="text-xs text-slate-500">FastAPI & Pytest</p>
-              <p className="text-xs text-emerald-600 font-medium mt-1">/health verified</p>
-            </div>
-            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 mb-1">
-                <Activity className="w-4 h-4 text-emerald-600" /> Frontend
-              </div>
-              <p className="text-xs text-slate-500">Vite, React & TS</p>
-              <p className="text-xs text-emerald-600 font-medium mt-1">Tailwind CSS Ready</p>
-            </div>
-          </div>
-        </div>
+            {/* Time-Series Generation & Forecast Chart */}
+            <GenerationChart
+              series={timeseries?.series || []}
+              alignment={params.alignment}
+              isLoading={isLoading}
+            />
+          </>
+        )}
+
+        {/* Tab 2: Transparency & Exclusions Audit View */}
+        {activeTab === "exclusions" && (
+          <ExclusionsView
+            exclusions={exclusions}
+            observations={timeseries?.series || []}
+            isLoading={isLoading}
+          />
+        )}
       </main>
 
-      <footer className="py-4 text-center text-xs text-slate-500 border-t border-slate-200">
-        WindCast Analytics &copy; 2026 | UK Electricity Utility Engineering Assignment
+      {/* Methodology Educational Modal */}
+      <MethodologyModal
+        isOpen={isMethodologyOpen}
+        onClose={() => setIsMethodologyOpen(false)}
+      />
+
+      {/* Global Utility Footer */}
+      <footer className="py-4 px-6 border-t border-slate-200 bg-white text-xs text-slate-500 text-center">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+          <span>WindCast Analytics &copy; 2026 | UK Electricity Utility Engineering Assignment</span>
+          <span>Data Sources: Elexon BMRS <code>FUELHH</code> (WIND) & <code>WINDFOR</code></span>
+        </div>
       </footer>
     </div>
   );
