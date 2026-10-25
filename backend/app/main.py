@@ -1,4 +1,6 @@
+import os
 from datetime import datetime, timezone
+from typing import List
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,12 +12,32 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# CORS configuration to allow local frontend development and production access
+# ---------------------------------------------------------------------------
+# CORS Configuration
+# ---------------------------------------------------------------------------
+# In production, set CORS_ORIGINS to your frontend domain(s) (comma-separated):
+# e.g. CORS_ORIGINS="https://windcast-analytics.vercel.app,http://localhost:3000"
+# In local development if unset, defaults to standard local development origins (non-wildcard).
+DEFAULT_DEV_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+
+def get_cors_origins() -> List[str]:
+    raw_env = os.environ.get("CORS_ORIGINS", "").strip()
+    if not raw_env:
+        return DEFAULT_DEV_ORIGINS
+    return [origin.strip() for origin in raw_env.split(",") if origin.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -33,3 +55,10 @@ async def health_check():
         "version": "0.1.0",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    # Support dynamic PORT injection by hosting providers (defaults to 8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("backend.app.main:app", host="0.0.0.0", port=port)

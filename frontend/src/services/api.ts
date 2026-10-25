@@ -18,6 +18,10 @@ export class ApiError extends Error {
   }
 }
 
+// In production on Vercel, VITE_API_BASE_URL points to the deployed backend (e.g. https://...onrender.com).
+// In local development and Docker Compose, this remains unset, preserving relative /api calls.
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/$/, "");
+
 function buildQuery(params: EvaluationQueryParams): string {
   const query = new URLSearchParams({
     start_date: params.startDate,
@@ -30,7 +34,9 @@ function buildQuery(params: EvaluationQueryParams): string {
 }
 
 async function request<T>(endpoint: string): Promise<T> {
-  const response = await fetch(endpoint, {
+  const url = API_BASE_URL ? `${API_BASE_URL}${endpoint}` : endpoint;
+
+  const response = await fetch(url, {
     headers: {
       Accept: "application/json",
     },
